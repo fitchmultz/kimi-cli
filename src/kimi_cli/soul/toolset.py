@@ -246,11 +246,15 @@ class KimiToolset:
 
             server_info.status = "connecting"
             try:
-                async with server_info.client as client:
-                    for tool in await client.list_tools():
-                        server_info.tools.append(
-                            MCPTool(server_name, tool, client, runtime=runtime)
-                        )
+                # Connect and keep the connection alive for the session lifetime.
+                # We use _connect() directly instead of async with to maintain the connection
+                # across multiple tool calls. This is necessary for stateful MCP servers like
+                # RepoPrompt that require window selection to persist.
+                await server_info.client._connect()
+                client = server_info.client
+
+                for tool in await client.list_tools():
+                    server_info.tools.append(MCPTool(server_name, tool, client, runtime=runtime))
 
                 for tool in server_info.tools:
                     self.add(tool)
@@ -383,14 +387,15 @@ class MCPTool[T: ClientTransport](CallableTool):
             return ToolRejectedError()
 
         try:
-            async with self._client as client:
-                result = await client.call_tool(
-                    self._mcp_tool.name,
-                    kwargs,
-                    timeout=self._timeout,
-                    raise_on_error=False,
-                )
-                return convert_mcp_tool_result(result)
+            # Use the client directly - the connection is maintained by MCPServerInfo
+            # We don't use async with here because _connect_server keeps the connection alive
+            result = await self._client.call_tool(
+                self._mcp_tool.name,
+                kwargs,
+                timeout=self._timeout,
+                raise_on_error=False,
+            )
+            return convert_mcp_tool_result(result)
         except Exception as e:
             # fastmcp raises `RuntimeError` on timeout and we cannot tell it from other errors
             exc_msg = str(e).lower()
